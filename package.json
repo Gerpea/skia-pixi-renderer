@@ -1,6 +1,6 @@
 {
-  "name": "pixi-skia-wrapper",
-  "version": "1.0.0",
+  "name": "skpxr",
+  "version": "0.0.1",
   "description": "TypeScript wrapper to render Pixi.js containers with Skia CanvasKit and export to PDF",
   "type": "module",
   "main": "./dist/index.js",

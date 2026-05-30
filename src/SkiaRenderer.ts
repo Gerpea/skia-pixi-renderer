@@ -1,37 +1,26 @@
 import CanvasKitInit from 'canvaskit-wasm';
-import type { CanvasKit, Canvas, Surface, Paint, Path, Image } from 'canvaskit-wasm';
+import type { CanvasKit, Canvas, Surface, Paint, Image } from 'canvaskit-wasm';
 import * as PIXI from 'pixi.js-legacy';
 import type { SkiaRendererOptions, RenderContext, PdfExportOptions } from './types';
 import { TransformManager } from './TransformManager';
-import {
-  MapperRegistry,
-  ContainerMapper,
-  GraphicsMapper,
-  SpriteMapper,
-  type SkiaMapper,
-} from './mappers';
+import { MapperRegistry, ContainerMapper, GraphicsMapper, SpriteMapper } from './mappers';
+import { InteractionManager, type InteractionEvent } from './InteractionManager';
+import { CK } from './utils/ck-helpers';
 
 export class SkiaRenderer {
   private ck: CanvasKit | null = null;
   private surface: Surface | null = null;
   private canvas: Canvas | null = null;
   private paint: Paint | null = null;
-  private path: Path | null = null;
 
   private registry = new MapperRegistry();
-  private imageCache = new Map<string, Image>();
-  private eventHandlers = new Map<
-    'pointerdown' | 'pointerup',
-    Set<(x: number, y: number) => void>
-  >();
+  private imageCache = new Map<string, any>();
+  private alphaCache = new Map<string, Uint8Array>(); // ✅ Add Alpha Cache
+  private interactionManager: InteractionManager | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private tickerBound = false;
 
   constructor(private options: SkiaRendererOptions) {
-    this.setupRegistry();
-    this.eventHandlers.set('pointerdown', new Set());
-    this.eventHandlers.set('pointerup', new Set());
-  }
-
-  private setupRegistry(): void {
     const containerMapper = new ContainerMapper();
     containerMapper.setRenderer(this);
     this.registry.register(containerMapper);
@@ -40,60 +29,68 @@ export class SkiaRenderer {
   }
 
   async init(): Promise<void> {
-    const { width, height, dpr = 1, wasmBaseUrl, locateFile } = this.options;
-
-    const effectiveLocateFile =
+    const { dpr = 1, wasmBaseUrl, locateFile, canvas: el } = this.options;
+    const loc =
       locateFile ||
-      ((file: string) => {
-        if (wasmBaseUrl) {
-          const base = wasmBaseUrl.endsWith('/') ? wasmBaseUrl : `${wasmBaseUrl}/`;
-          return `${base}${file}`;
-        }
-        return `/canvaskit/${file}`;
+      (f => {
+        const base = wasmBaseUrl?.endsWith('/') ? wasmBaseUrl : `${wasmBaseUrl}/`;
+        return base ? `${base}${f}` : `/canvaskit/${f}`;
       });
 
-    this.ck = await CanvasKitInit({ locateFile: effectiveLocateFile });
+    this.ck = await CanvasKitInit({ locateFile: loc });
+    this.updateCanvasSize();
 
-    const canvasEl = this.options.canvas;
-    canvasEl.width = width * dpr;
-    canvasEl.height = height * dpr;
-    canvasEl.style.width = `${width}px`;
-    canvasEl.style.height = `${height}px`;
+    this.resizeObserver = new ResizeObserver(() => this.updateCanvasSize());
+    this.resizeObserver.observe(el);
 
-    this.surface = this.ck!.MakeSWCanvasSurface(canvasEl);
+    this.surface = this.ck.MakeSWCanvasSurface(el);
     if (!this.surface) throw new Error('MakeSWCanvasSurface returned null');
 
     this.canvas = this.surface.getCanvas();
-    this.paint = new this.ck!.Paint();
-    this.paint.setAntiAlias(true);
-    this.path = new this.ck!.Path();
+    this.paint = CK.makePaint(this.ck);
 
-    canvasEl.addEventListener('pointerdown', e => this.handlePointerEvent(e, 'pointerdown'));
-    canvasEl.addEventListener('pointerup', e => this.handlePointerEvent(e, 'pointerup'));
+    this.interactionManager = new InteractionManager(
+      el,
+      this.ck,
+      this.registry,
+      () => this.options.scene,
+      this.alphaCache // ✅ Pass to Interaction Manager
+    );
+    PIXI.Ticker.shared.add(this.onTick);
+    this.tickerBound = true;
+  }
+
+  private onTick = (): void => {
+    if (this.options.scene) this.renderContainer(this.options.scene);
+  };
+
+  private updateCanvasSize(): void {
+    const { dpr = 1, canvas: el } = this.options;
+    const rect = el.getBoundingClientRect();
+
+    el.width = Math.ceil(rect.width * dpr);
+    el.height = Math.ceil(rect.height * dpr);
+    el.style.width = `${rect.width}px`;
+    el.style.height = `${rect.height}px`;
   }
 
   renderContainer(container: PIXI.Container): void {
-    if (!this.canvas || !this.ck || !this.paint || !this.path) return;
-
+    if (!this.canvas || !this.ck || !this.paint) return;
     const ctx: RenderContext = {
       ck: this.ck,
       canvas: this.canvas,
       paint: this.paint,
       imageCache: this.imageCache,
+      alphaCache: this.alphaCache, // ✅ Pass to Render Context
     };
-
-    this.canvas.clear(this.ck!.Color4f(0.15, 0.15, 0.15, 1));
+    this.canvas.clear(this.ck.Color4f(0, 0, 0, 0));
     this.drawObject(ctx, container, TransformManager.identity());
     this.surface?.flush();
   }
 
   drawObject(ctx: RenderContext, obj: PIXI.DisplayObject, worldMatrix: Float32Array): void {
     if (!obj.visible || obj.alpha === 0) return;
-
-    const mapper = this.registry.getMapper(obj);
-    if (mapper) {
-      (mapper as SkiaMapper).draw(ctx, obj as any, worldMatrix);
-    }
+    this.registry.getMapper(obj)?.draw(ctx, obj, worldMatrix);
   }
 
   hitTestObject(
@@ -103,102 +100,53 @@ export class SkiaRenderer {
     x: number,
     y: number
   ): boolean {
-    const mapper = this.registry.getMapper(obj);
-    return mapper ? (mapper as SkiaMapper).hitTest(ctx, obj as any, worldMatrix, x, y) : false;
+    return this.registry.getMapper(obj)?.hitTest(ctx, obj, worldMatrix, x, y) ?? false;
   }
 
-  private handlePointerEvent(event: PointerEvent, type: 'pointerdown' | 'pointerup'): void {
-    if (!this.canvas || !this.ck) return;
-    const rect = (event.target as HTMLCanvasElement).getBoundingClientRect();
-    const x = (event.clientX - rect.left) * (this.options.canvas.width / rect.width);
-    const y = (event.clientY - rect.top) * (this.options.canvas.height / rect.height);
-
-    const handlers = this.eventHandlers.get(type);
-    if (handlers) {
-      for (const handler of handlers) handler(x, y);
-    }
+  on(event: string, cb: (e: InteractionEvent) => void): void {
+    this.interactionManager?.on(event, cb);
+  }
+  off(event: string, cb: (e: InteractionEvent) => void): void {
+    this.interactionManager?.off(event, cb);
   }
 
-  on(event: 'pointerdown' | 'pointerup', handler: (x: number, y: number) => void): void {
-    this.eventHandlers.get(event)?.add(handler);
-  }
+  async exportToPdf(options: PdfExportOptions = {}): Promise<Uint8Array> {
+    if (!this.ck?.pdf) throw new Error('PDF support not enabled in CanvasKit build');
+    if (!this.options.scene) throw new Error('No scene provided for PDF export');
 
-  off(event: 'pointerdown' | 'pointerup', handler: (x: number, y: number) => void): void {
-    this.eventHandlers.get(event)?.delete(handler);
-  }
-
-  setVisible(visible: boolean): void {
-    this.options.canvas.style.display = visible ? 'block' : 'none';
-    this.options.canvas.style.pointerEvents = visible ? 'auto' : 'none';
-  }
-
-  // 🆕 PDF EXPORT METHODS (Reuse existing mappers)
-
-  /**
-   * Exports a Pixi container to a PDF Uint8Array.
-   * Reuses the same MapperRegistry and RenderContext, ensuring pixel-perfect parity
-   * between screen and PDF without duplicated drawing logic.
-   */
-  async exportToPdf(
-    container: PIXI.Container,
-    options: PdfExportOptions = {}
-  ): Promise<Uint8Array> {
-    if (!this.ck?.pdf) {
-      throw new Error(
-        'PDF export is not available. CanvasKit must be built with skia_enable_pdf=true.'
-      );
-    }
-
-    const pageSize = options.pageSize || { width: this.options.width, height: this.options.height };
+    const page = options.pageSize || {
+      width: this.options.canvas.clientWidth,
+      height: this.options.canvas.clientHeight,
+    };
     const doc = this.ck.MakePDFDocument(options.metadata || {});
-    if (!doc) {
-      throw new Error('Failed to create PDF document.');
-    }
+    if (!doc) throw new Error('Failed to create PDF document');
 
     try {
-      // Begin page: returns a Canvas identical to our screen canvas
-      const pageCanvas = doc.beginPage(pageSize.width, pageSize.height);
-      if (!pageCanvas) {
-        throw new Error('Failed to begin PDF page.');
-      }
+      const pdfCanvas = doc.beginPage(page.width, page.height);
+      if (!pdfCanvas) throw new Error('Failed to begin page');
 
-      // Create temporary paint for PDF rendering
-      const pdfPaint = new this.ck.Paint();
+      const pdfPaint = CK.makePaint(this.ck);
       pdfPaint.setAntiAlias(true);
-      pdfPaint.setDither(true);
-
-      // Reuse existing render context & mappers
-      const pdfContext: RenderContext = {
+      const ctx: RenderContext = {
         ck: this.ck,
-        canvas: pageCanvas,
+        canvas: pdfCanvas,
         paint: pdfPaint,
         imageCache: this.imageCache,
+        alphaCache: this.alphaCache, // ✅ Pass to PDF Context
       };
 
-      // Draw scene to PDF canvas using the exact same pipeline
-      this.drawObject(pdfContext, container, TransformManager.identity());
-
-      // Finalize document
+      this.drawObject(ctx, this.options.scene, TransformManager.identity());
       doc.endPage();
-      const pdfBytes = doc.close();
-
-      // Cleanup
-      pdfPaint.delete();
-      return pdfBytes;
-    } catch (err) {
+      return doc.close();
+    } catch (e) {
       doc.abort();
-      throw err;
+      throw e;
     }
   }
 
-  /**
-   * Convenience method to trigger a browser download of the generated PDF.
-   */
-  async downloadPdf(container: PIXI.Container, options: PdfExportOptions = {}): Promise<void> {
-    const pdfBytes = await this.exportToPdf(container, options);
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-
+  async downloadPdf(options: PdfExportOptions = {}): Promise<void> {
+    const bytes = await this.exportToPdf(options);
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
     a.download = options.filename || 'export.pdf';
@@ -209,12 +157,14 @@ export class SkiaRenderer {
   }
 
   destroy(): void {
+    if (this.tickerBound) PIXI.Ticker.shared.remove(this.onTick);
+    this.resizeObserver?.disconnect();
     this.imageCache.forEach(img => img.delete?.());
     this.imageCache.clear();
-    this.paint?.delete?.();
-    this.path?.delete?.();
+    this.paint?.delete();
     this.surface?.flush();
-    this.surface?.delete?.();
+    this.surface?.delete();
+    this.interactionManager?.destroy();
     this.ck = null;
   }
 }

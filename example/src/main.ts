@@ -1,73 +1,92 @@
-import { DualRendererApp } from './DualRendererApp';
-import { SceneFactory, type SceneObjects } from './SceneFactory';
+// example/src/main.ts
+import * as PIXI from 'pixi.js-legacy';
+import { SkiaRenderer } from 'skpxr';
+import { SceneFactory } from './SceneFactory';
 import { UIController } from './UIController';
 import { exportSceneToPdf } from './utils/pdf-export';
 import './ui/styles.scss';
 
 async function init(): Promise<void> {
-  const pixiContainer = document.getElementById('pixi-container');
-  const skiaContainer = document.getElementById('skia-container');
-  
-  if (!pixiContainer || !skiaContainer) {
-    throw new Error('Render containers not found in DOM');
-  }
-
-  const app = new DualRendererApp({
-    pixiContainer,
-    skiaContainer,
+  // 1️⃣ Initialize Pixi Application
+  const pixiApp = new PIXI.Application({
     width: 300,
-    height: 300
+    height: 300,
+    backgroundColor: 0x1099bb,
+    forceCanvas: true,
+    resolution: window.devicePixelRatio || 1
   });
-  await app.init();
+  document.getElementById('pixi-container')!.appendChild(pixiApp.view);
 
-  const scene: SceneObjects = SceneFactory.createSampleScene();
-  app.setScene(scene.mainContainer);
+  // 2️⃣ Create Shared Scene Container
+  const scene = new PIXI.Container();
+  pixiApp.stage.addChild(scene);
 
+  // 3️⃣ Initialize Skia Renderer (New API: auto-syncs to Ticker.shared & ResizeObserver)
+  const skiaRenderer = new SkiaRenderer({
+    scene,
+    canvas: document.getElementById('skia-canvas') as HTMLCanvasElement,
+    wasmBaseUrl: '/canvaskit/'
+  });
+  await skiaRenderer.init();
+
+  // 4️⃣ Add Initial Shapes & Sprites
+  const initialObjects = SceneFactory.createSampleScene();
+  scene.addChild(initialObjects.mainContainer);
+
+  // 5️⃣ UI Setup
   const ui = new UIController();
   ui.enableControls();
 
   ui.onGenerate(() => {
-    const shape = SceneFactory.createRandomGraphics();
-    scene.mainContainer.addChild(shape);
+    scene.addChild(SceneFactory.createRandomGraphics());
     ui.updateStatus('🎲 Shape added to scene');
   });
 
   ui.onAddSprite(() => {
-    const sprite = SceneFactory.createRandomSprite();
-    scene.mainContainer.addChild(sprite);
+    scene.addChild(SceneFactory.createRandomSprite());
     ui.updateStatus('🖼️ Sprite added to scene');
   });
 
   ui.onExport(async () => {
-    try {
-      await exportSceneToPdf(app.getSkiaRenderer(), scene.mainContainer);
-      ui.updateStatus('✅ PDF exported successfully');
-    } catch (err) {
-      console.error('Export failed:', err);
-      ui.updateStatus('❌ Export failed: ' + (err as Error).message);
+    await exportSceneToPdf(skiaRenderer);
+    ui.updateStatus('✅ PDF exported successfully');
+  });
+
+  // 6️⃣ Skia Interaction (Pixi-like API)
+  skiaRenderer.on('pointerdown', (e) => {
+    if (e.target) {
+      console.log(`👆 Skia Clicked: ${e.target.constructor.name}`);
+      // Visual feedback: toggle tint
+      e.target.tint = e.target.tint === 0xFFFFFF ? 0xCCCCCC : 0xFFFFFF;
     }
   });
 
-  app.onPixiPointerDown((x, y, target) => {
-    console.log(`👆 Pixi pointerdown: (${x.toFixed(1)}, ${y.toFixed(1)})`, target?.constructor.name);
+  skiaRenderer.on('pointerover', () => {
+    (document.getElementById('skia-canvas') as HTMLCanvasElement).style.cursor = 'pointer';
   });
 
-  app.onSkiaPointerDown((x, y) => {
-    console.log(`👆 Skia pointerdown: (${x.toFixed(1)}, ${y.toFixed(1)})`);
+  skiaRenderer.on('pointerout', () => {
+    (document.getElementById('skia-canvas') as HTMLCanvasElement).style.cursor = 'default';
   });
 
-  (window as any).__DUAL_APP__ = app;
-  (window as any).__SCENE__ = scene;
+  // 7️⃣ FPS Tracking
+  let pFrames = 0, sFrames = 0, lastTime = performance.now();
+  pixiApp.ticker.add(() => {
+    pFrames++;
+    sFrames++; // Skia auto-renders on shared ticker, so we count frames here
+    const now = performance.now();
+    if (now - lastTime >= 1000) {
+      document.getElementById('pixi-fps')!.textContent = `${pFrames} FPS`;
+      document.getElementById('skia-fps')!.textContent = `${sFrames} FPS`;
+      pFrames = 0; sFrames = 0; lastTime = now;
+    }
+  });
 
-  console.log('✅ Dual-renderer example initialized');
-  console.log('👀 Pixi & Skia are permanently synced');
+  // 8️⃣ Cleanup on unload
+  window.addEventListener('beforeunload', () => skiaRenderer.destroy());
 }
 
 init().catch(err => {
   console.error('🚨 Init failed:', err);
-  const status = document.getElementById('status');
-  if (status) {
-    status.textContent = '⛔ Error: ' + (err as Error).message;
-    status.className = 'status error';
-  }
+  document.getElementById('status')!.textContent = '⛔ Error: ' + err.message;
 });

@@ -26,7 +26,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
-      'pixi-skia-wrapper': path.resolve(__dirname, '../src/index.ts'),
+      'skpxr': path.resolve(__dirname, '../src/index.ts'),
       'canvaskit-wasm': path.resolve(__dirname, '../vendor/canvaskit-wasm/index.js')
     }
   },
@@ -44,7 +44,7 @@ export default defineConfig({
   },
 
   optimizeDeps: {
-    exclude: ['pixi-skia-wrapper', 'canvaskit-wasm']
+    exclude: ['skpxr', 'canvaskit-wasm']
   },
 
   css: {

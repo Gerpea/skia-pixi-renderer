@@ -62,7 +62,7 @@ export class SceneFactory {
 
     subContainer.position.set(75, 50);
     subContainer.addChild(g3, g4);
-    mainContainer.addChild(subContainer, g1, g2, sprite);
+    mainContainer.addChild(subContainer);
 
     return { mainContainer, subContainer, g1, g2, g3, g4, sprite };
   }

@@ -1,36 +1,26 @@
+import * as PIXI from 'pixi.js-legacy';
+
 export class TransformManager {
   private static readonly IDENTITY = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
-  /**
-   * Convert Pixi's 2D affine transform to Skia's row-major matrix.
-   * Pixi: { a, b, c, d, tx, ty } where:
-   *   a=scaleX, b=skewY, c=skewX, d=scaleY, tx/ty=translation
-   * Skia row-major: [scaleX, skewX, transX, skewY, scaleY, transY, 0, 0, 1]
-   */
-  static pixiToSkiaMatrix(pixiTransform: any): Float32Array {
-    const { a, b, c, d, tx, ty } = pixiTransform;
+  /** Pixi {a,b,c,d,tx,ty} → Skia row-major [a, c, tx, b, d, ty, 0, 0, 1] */
+  static pixiToSkiaMatrix(t: PIXI.Transform): Float32Array {
+    const { a, b, c, d, tx, ty } = t.localTransform;
     return new Float32Array([a, c, tx, b, d, ty, 0, 0, 1]);
   }
 
-  static multiplyMatrices(a: Float32Array, b: Float32Array): Float32Array {
-    const r = new Float32Array(9);
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 3; col++) {
-        r[row * 3 + col] =
-          a[row * 3 + 0] * b[0 * 3 + col] +
-          a[row * 3 + 1] * b[1 * 3 + col] +
-          a[row * 3 + 2] * b[2 * 3 + col];
+  static multiply(a: Float32Array, b: Float32Array): Float32Array {
+    const out = new Float32Array(9);
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
       }
     }
-    return r;
+    return out;
   }
 
-  static inverseTransformPoint(
-    matrix: Float32Array,
-    x: number,
-    y: number
-  ): { x: number; y: number } {
-    const [a, c, tx, b, d, ty] = matrix;
+  static inverseTransformPoint(m: Float32Array, x: number, y: number): { x: number; y: number } {
+    const [a, c, tx, b, d, ty] = m;
     const det = a * d - b * c;
     if (Math.abs(det) < 1e-6) return { x, y };
     const inv = 1 / det;

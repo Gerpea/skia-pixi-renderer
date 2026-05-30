@@ -1,4 +1,3 @@
-// src/skia-wrapper/mappers/ContainerMapper.ts
 import * as PIXI from 'pixi.js-legacy';
 import type { SkiaMapper } from './SkiaMapper';
 import type { RenderContext } from '../types';
@@ -9,39 +8,26 @@ export class ContainerMapper implements SkiaMapper<PIXI.Container> {
   priority = 10;
   private renderer: SkiaRenderer | null = null;
 
-  setRenderer(renderer: SkiaRenderer): void {
-    this.renderer = renderer;
-  }
-
-  canHandle(obj: PIXI.DisplayObject): obj is PIXI.Container {
-    return obj instanceof PIXI.Container;
-  }
+  setRenderer(r: SkiaRenderer): void { this.renderer = r; }
+  canHandle(obj: PIXI.DisplayObject): obj is PIXI.Container { return obj instanceof PIXI.Container; }
 
   draw(ctx: RenderContext, container: PIXI.Container, parentMatrix: Float32Array): void {
-    const canvas = ctx.canvas;
-    canvas.save();
-    canvas.concat(TransformManager.pixiToSkiaMatrix(container.transform.localTransform));
+    ctx.canvas?.save();
+    ctx.canvas?.concat(TransformManager.pixiToSkiaMatrix(container.transform));
     
-    const currentWorld = TransformManager.multiplyMatrices(
-      parentMatrix,
-      TransformManager.pixiToSkiaMatrix(container.transform.localTransform)
-    );
-
+    const world = TransformManager.multiply(parentMatrix, TransformManager.pixiToSkiaMatrix(container.transform));
     for (const child of container.children) {
-      if (child.visible && child.alpha > 0) {
-        this.renderer?.drawObject(ctx, child, currentWorld);
-      }
+      if (child.visible && child.alpha > 0) this.renderer?.drawObject(ctx, child, world);
     }
-    canvas.restore();
+    ctx.canvas?.restore();
   }
 
-  hitTest(ctx: RenderContext, container: PIXI.Container, parentMatrix: Float32Array, x: number, y: number): boolean {
-    for (let i = container.children.length - 1; i >= 0; i--) {
-      const child = container.children[i];
-      if (!child.visible || child.alpha <= 0) continue;
-      if (this.renderer?.hitTestObject(ctx, child, parentMatrix, x, y)) {
-        return true;
-      }
+  hitTest(ctx: RenderContext, container: PIXI.Container, worldMatrix: Float32Array, x: number, y: number): boolean {
+    // A container itself is only clickable if it has an explicit hitArea.
+    // Its children are handled by the recursive tree walk in InteractionManager.
+    if (container.hitArea) {
+      const local = TransformManager.inverseTransformPoint(worldMatrix, x, y);
+      return container.hitArea.contains(local.x, local.y);
     }
     return false;
   }
