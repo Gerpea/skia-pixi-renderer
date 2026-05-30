@@ -3,38 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Skia Renderer for Pixi.js + PDF Export</title>
+  <title>Skia Renderer Examples - Pixi.js vs Skia CanvasKit</title>
 </head>
 <body>
   <div id="app">
-    <header>
-      <h1>🎨 Pixi.js ↔ Skia CanvasKit</h1>
-      <div class="controls">
-        <button id="btn-generate" disabled>🎲 Add Shape</button>
-        <button id="btn-sprite" disabled>🖼️ Add Sprite</button>
-        <button id="btn-export" disabled>📄 Export PDF</button>
-        <span class="status" id="status">Initializing...</span>
-      </div>
-    </header>
+    <!-- Drawer - always visible -->
+    <aside id="example-drawer">
+      <h2>Examples</h2>
+      <div id="example-list"></div>
+    </aside>
     
-    <div id="render-panels">
-      <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Pixi.js (Canvas)</span>
-          <span class="panel-fps" id="pixi-fps">-- FPS</span>
-        </div>
-        <div class="canvas-wrapper" id="pixi-container"></div>
-      </div>
-      
-      <div class="panel">
-        <div class="panel-header">
-          <span class="panel-title">Skia CanvasKit</span>
-          <span class="panel-fps" id="skia-fps">-- FPS</span>
-        </div>
-        <div class="canvas-wrapper" id="skia-container">
-        </div>
-      </div>
-    </div>
+    <!-- Main Content Area -->
+    <main id="example-container">
+      <!-- Examples will be dynamically mounted here -->
+    </main>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

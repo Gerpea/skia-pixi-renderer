@@ -87,9 +87,13 @@ export class SceneFactory {
       g.lineTo(Math.random() * 150, Math.random() * 150);
     }
     
+    // Position randomly across full canvas (600x600)
+    g.x = 50 + Math.random() * 500;
+    g.y = 50 + Math.random() * 500;
+    
     g.angle = Math.random() * 45 - 22.5;
     g.eventMode = 'static';
-    g.cursor = 'pointer';
+    g.cursor = 'grab';
     g.on('pointerdown', () => console.log('🎲 Random shape clicked!'));
 
     g.on('pointerdown', (e) => {
@@ -100,13 +104,42 @@ export class SceneFactory {
     g.on('pointerup', (e) => {
       e.target.tint = 0xFFFFFF;
     });
-    g.on('pointerover', () => { g.scale.set(1.1); });
-    g.on('pointerout', () => { g.scale.set(1.0); });
+    // Removed scale change on pointerover/out to prevent resize issues
+    g.on('pointerover', () => { });
+    g.on('pointerout', () => { });
 
     return g;
   }
 
-  static createRandomSprite(): PIXI.Sprite {
+  /** Version without pointer events for examples */
+  static createRandomGraphicsNoEvents(): PIXI.Graphics {
+    const g = new PIXI.Graphics();
+    const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    
+    if (Math.random() > 0.5) {
+      g.beginFill(color);
+      g.drawRect(
+        Math.random() * 100,
+        Math.random() * 100,
+        30 + Math.random() * 40,
+        30 + Math.random() * 40
+      );
+      g.endFill();
+    } else {
+      g.lineStyle(4, color, 1);
+      g.moveTo(Math.random() * 150, Math.random() * 150);
+      g.lineTo(Math.random() * 150, Math.random() * 150);
+    }
+    
+    g.angle = Math.random() * 45 - 22.5;
+    // Position randomly across full canvas (400x400)
+    g.x = 50 + Math.random() * 300;
+    g.y = 50 + Math.random() * 300;
+    return g;
+  }
+
+static createRandomSprite(): PIXI.Sprite {
     const cvs = document.createElement('canvas');
     cvs.width = 80;
     cvs.height = 80;
@@ -131,21 +164,21 @@ export class SceneFactory {
       case 1: // Checkerboard
         const size = 20;
         for (let y = 0; y < 4; y++) {
-          for (let x = 0; x < 4; x++) {
-            ctx.fillStyle = (x + y) % 2 === 0 ? '#000000' : '#ffffff';
-            ctx.fillRect(x * size, y * size, size, size);
+            for (let x = 0; x < 4; x++) {
+              ctx.fillStyle = (x + y) % 2 === 0 ? '#000000' : '#ffffff';
+              ctx.fillRect(x * size, y * size, size, size);
+            }
           }
-        }
         break;
 
       case 2: // Star
         ctx.fillStyle = '#fbbf24';
         ctx.beginPath();
         for (let i = 0; i < 10; i++) {
-          const radius = i % 2 === 0 ? 35 : 15;
-          const angle = (i * Math.PI) / 5 - Math.PI / 2;
-          ctx.lineTo(40 + Math.cos(angle) * radius, 40 + Math.sin(angle) * radius);
-        }
+            const radius = i % 2 === 0 ? 35 : 15;
+            const angle = (i * Math.PI) / 5 - Math.PI / 2;
+            ctx.lineTo(40 + Math.cos(angle) * radius, 40 + Math.sin(angle) * radius);
+          }
         ctx.fill();
         ctx.strokeStyle = '#b45309';
         ctx.lineWidth = 2;
@@ -165,10 +198,86 @@ export class SceneFactory {
     const sprite = new PIXI.Sprite(texture);
     
     sprite.anchor.set(0.5);
-    sprite.position.set(40 + Math.random() * 220, 40 + Math.random() * 220);
+    // Position randomly across full canvas (600x600)
+    sprite.x = 50 + Math.random() * 500;
+    sprite.y = 50 + Math.random() * 500;
     sprite.angle = Math.random() * 360;
     sprite.scale.set(0.5 + Math.random() * 1);
     
+    // Add event mode for interaction
+    sprite.eventMode = 'static';
+    sprite.cursor = 'grab';
+    sprite.on('pointerdown', () => console.log('🖼️ Sprite clicked!'));
+
+    return sprite;
+  }
+
+/** Version without pointer events for examples */
+  static createRandomSpriteNoEvents(): PIXI.Sprite {
+    const cvs = document.createElement('canvas');
+    cvs.width = 80;
+    cvs.height = 80;
+    const ctx = cvs.getContext('2d')!;
+    
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
+    const type = Math.floor(Math.random() * 4);
+
+    switch (type) {
+      case 0: // Gradient Sphere
+        const grad = ctx.createRadialGradient(40, 40, 5, 40, 40, 35);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.5, '#ff6b6b');
+        grad.addColorStop(1, '#1a1a2e');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 80, 80);
+        break;
+
+      case 1: // Checkerboard
+        const size = 20;
+        for (let y = 0; y < 4; y++) {
+            for (let x = 0; x < 4; x++) {
+              ctx.fillStyle = (x + y) % 2 === 0 ? '#000000' : '#ffffff';
+              ctx.fillRect(x * size, y * size, size, size);
+            }
+          }
+        break;
+
+      case 2: // Star
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+            const radius = i % 2 === 0 ? 35 : 15;
+            const angle = (i * Math.PI) / 5 - Math.PI / 2;
+            ctx.lineTo(40 + Math.cos(angle) * radius, 40 + Math.sin(angle) * radius);
+          }
+        ctx.fill();
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        break;
+
+      case 3: // Emoji
+        ctx.font = '64px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const emojis = ['🚀', '🌟', '🔥', '🎲', '💎', '🌈', '🎨', '🧊'];
+        ctx.fillText(emojis[Math.floor(Math.random() * emojis.length)], 40, 40);
+        break;
+    }
+
+    const texture = PIXI.Texture.from(cvs.toDataURL('image/png'));
+    const sprite = new PIXI.Sprite(texture);
+    
+    sprite.anchor.set(0.5);
+    // Position randomly across full canvas (400x400)
+    sprite.x = 50 + Math.random() * 300;
+    sprite.y = 50 + Math.random() * 300;
+    sprite.angle = Math.random() * 360;
+    sprite.scale.set(0.5 + Math.random() * 1);
+    
+    // No eventMode - just visual elements
     return sprite;
   }
 }

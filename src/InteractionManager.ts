@@ -1,5 +1,6 @@
+// src/skia-wrapper/InteractionManager.ts
 import * as PIXI from 'pixi.js-legacy';
-import type { CanvasKit } from 'canvaskit-wasm';
+import type { CanvasKit, Path } from 'canvaskit-wasm';
 import type { RenderContext } from './types';
 import { MapperRegistry } from './mappers';
 import { TransformManager } from './TransformManager';
@@ -43,10 +44,14 @@ export class InteractionManager {
     this.canvas.addEventListener('pointerdown', this.onDown);
     this.canvas.addEventListener('pointermove', this.onMove);
     this.canvas.addEventListener('pointerup', this.onUp);
+    this.canvas.addEventListener('pointercancel', this.onCancel);
     this.canvas.addEventListener('pointerleave', this.onOut);
+
+    // ✅ Global listeners ensure pointerup reaches drag target even outside canvas
+    window.addEventListener('pointerup', this.onGlobalUp);
+    window.addEventListener('pointercancel', this.onGlobalUp);
   }
 
-  // ✅ Renderer-level listeners (optional, for global canvas events)
   on(event: string, cb: (e: InteractionEvent) => void): void {
     if (!this.callbacks.has(event)) this.callbacks.set(event, new Set());
     this.callbacks.get(event)!.add(cb);
@@ -59,7 +64,10 @@ export class InteractionManager {
     this.canvas.removeEventListener('pointerdown', this.onDown);
     this.canvas.removeEventListener('pointermove', this.onMove);
     this.canvas.removeEventListener('pointerup', this.onUp);
+    this.canvas.removeEventListener('pointercancel', this.onCancel);
     this.canvas.removeEventListener('pointerleave', this.onOut);
+    window.removeEventListener('pointerup', this.onGlobalUp);
+    window.removeEventListener('pointercancel', this.onGlobalUp);
   }
 
   private getCoords(e: PointerEvent): { x: number; y: number } {
@@ -68,32 +76,58 @@ export class InteractionManager {
   }
 
   private onDown = (e: PointerEvent) => {
+    this.canvas.setPointerCapture(e.pointerId);
     const ev = this.hitTest(e);
-    this.downTarget = ev.target; // ✅ Track down target
+    this.downTarget = ev.target;
+
     this.emitRendererEvent('pointerdown', ev);
     PixiEventBridge.dispatch('pointerdown', ev.target, ev.global, e);
   };
 
   private onUp = (e: PointerEvent) => {
     const ev = this.hitTest(e);
-    this.emitRendererEvent('pointerup', ev);
-    PixiEventBridge.dispatch('pointerup', ev.target, ev.global, e);
 
-    // ✅ 2. TAP / CLICK GESTURE RECOGNITION
+    // ✅ Always dispatch pointerup to the original downTarget so dragging state clears
+    const upTarget = this.downTarget || ev.target;
+    this.emitRendererEvent('pointerup', { ...ev, target: upTarget });
+    PixiEventBridge.dispatch('pointerup', upTarget, ev.global, e);
+
+    // Tap/click only if up and down match
     if (this.downTarget && this.downTarget === ev.target) {
       this.emitRendererEvent('pointertap', ev);
       PixiEventBridge.dispatch('pointertap', ev.target, ev.global, e);
-
-      // Pixi also emits 'click' for mouse/touch parity
       this.emitRendererEvent('click', ev);
       PixiEventBridge.dispatch('click', ev.target, ev.global, e);
     }
-    this.downTarget = null;
+
+    this.clearDragState(e);
   };
+
+  private onCancel = (e: PointerEvent) => {
+    this.clearDragState(e);
+  };
+
+  private onGlobalUp = (e: PointerEvent) => {
+    // Only process if it originated from our canvas
+    if (this.downTarget) {
+      const global = this.getCoords(e);
+      const ev = {
+        type: 'pointerup' as const,
+        target: this.downTarget,
+        global,
+        local: { x: 0, y: 0 },
+        originalEvent: e,
+      };
+      this.emitRendererEvent('pointerup', ev);
+      PixiEventBridge.dispatch('pointerup', this.downTarget, global, e);
+      this.clearDragState(e);
+    }
+  };
+
   private onMove = (e: PointerEvent) => {
+    const global = this.getCoords(e);
     const ev = this.hitTest(e);
 
-    // ✅ 1. CURSOR MANAGEMENT
     const cursor = (ev.target as any)?.cursor || 'default';
     if (this.canvas.style.cursor !== cursor) {
       this.canvas.style.cursor = cursor;
@@ -106,21 +140,23 @@ export class InteractionManager {
           target: this.overTarget,
           type: 'pointerout',
         });
-        PixiEventBridge.dispatch('pointerout', this.overTarget, ev.global, e);
+        PixiEventBridge.dispatch('pointerout', this.overTarget, global, e);
       }
       if (ev.target) {
         this.emitRendererEvent('pointerover', { ...ev, type: 'pointerover' });
-        PixiEventBridge.dispatch('pointerover', ev.target, ev.global, e);
+        PixiEventBridge.dispatch('pointerover', ev.target, global, e);
       }
       this.overTarget = ev.target;
     }
 
+    // ✅ Dispatch move to actual hit target (hover logic stays independent)
     this.emitRendererEvent('pointermove', ev);
-    PixiEventBridge.dispatch('pointermove', ev.target, ev.global, e);
+    PixiEventBridge.dispatch('pointermove', ev.target, global, e);
   };
 
   private onOut = (e: PointerEvent) => {
     this.canvas.style.cursor = 'default';
+
     if (this.overTarget) {
       const ev = {
         type: 'pointerout' as const,
@@ -132,14 +168,17 @@ export class InteractionManager {
       this.emitRendererEvent('pointerout', ev);
       PixiEventBridge.dispatch('pointerout', this.overTarget, { x: 0, y: 0 }, e);
     }
+
     this.overTarget = null;
   };
 
-  private processEvent(type: 'pointerdown' | 'pointerup', e: PointerEvent): void {
-    const ev = this.hitTest(e);
-    this.emitRendererEvent(type, ev);
-    // ✅ Removed local parameter
-    PixiEventBridge.dispatch(type, ev.target, ev.global, e);
+  private clearDragState(e: PointerEvent): void {
+    try {
+      this.canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      // I want application to not crush, but don't care about the message
+    }
+    this.downTarget = null;
   }
 
   private emitRendererEvent(type: string, ev: InteractionEvent): void {
@@ -152,7 +191,10 @@ export class InteractionManager {
     const target = scene
       ? this.recursiveHitTest(scene, TransformManager.identity(), global.x, global.y)
       : null;
-    let local = { x: global.x, y: global.y };
+    let local = {
+      x: global.x,
+      y: global.y,
+    };
 
     if (target) {
       const m = TransformManager.pixiToSkiaMatrix(target.transform);
@@ -163,7 +205,6 @@ export class InteractionManager {
     return { type: 'pointermove', target, global, local, originalEvent: e };
   }
 
-  /** Recursive hit test that respects Pixi's eventMode, interactiveChildren, and hitArea */
   private recursiveHitTest(
     obj: PIXI.DisplayObject,
     parentMatrix: Float32Array,
@@ -177,7 +218,6 @@ export class InteractionManager {
       TransformManager.pixiToSkiaMatrix(obj.transform)
     );
 
-    // ✅ Check children FIRST (back-to-front), but respect interactiveChildren
     if (obj instanceof PIXI.Container && (obj as any).interactiveChildren !== false) {
       for (let i = obj.children.length - 1; i >= 0; i--) {
         const hit = this.recursiveHitTest(obj.children[i], world, x, y);
@@ -185,17 +225,14 @@ export class InteractionManager {
       }
     }
 
-    // ✅ Check if this object is interactive
     if (!PixiEventBridge.isInteractive(obj)) return null;
 
-    // ✅ Use explicit hitArea if provided (bypasses mapper hit test)
     if (obj.hitArea) {
       const local = TransformManager.inverseTransformPoint(world, x, y);
       if (obj.hitArea.contains(local.x, local.y)) return obj;
       return null;
     }
 
-    // ✅ Fallback to mapper hit test (Graphics, Sprite, etc.)
     const mapper = this.registry.getMapper(obj);
     if (mapper?.hitTest(this.hitCtx, obj, world, x, y)) {
       return obj;

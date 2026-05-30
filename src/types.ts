@@ -7,6 +7,7 @@ export interface RenderContext {
   paint: Paint | null;
   imageCache: Map<string, Image>;
   alphaCache: Map<string, Uint8Array>;
+  activeMasks?: Set<PIXI.DisplayObject>;
 }
 
 export interface SkiaRendererOptions {

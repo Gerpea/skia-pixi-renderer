@@ -4,7 +4,7 @@ export class TransformManager {
   private static readonly IDENTITY = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
   static pixiToSkiaMatrix(pixiTransform: PIXI.Transform): Float32Array {
-    const { a, b, c, d, tx, ty } = pixiTransform.localTransform;
+    const { a, b, c, d, tx, ty } = pixiTransform.localTransform || pixiTransform;
     return new Float32Array([a, c, tx, b, d, ty, 0, 0, 1]);
   }
 
@@ -47,9 +47,10 @@ export class TransformManager {
     const det = a * d - b * c;
     if (Math.abs(det) < 1e-6) return { x, y };
     const inv = 1 / det;
+    // Correct inverse transformation: translate first, then apply inverse rotation/scale
     return {
-      x: (d * (x - tx) - c * (y - ty)) * inv,
-      y: (a * (y - ty) - b * (x - tx)) * inv,
+      x: d * (x - tx) * inv + c * (y - ty) * inv,
+      y: -b * (x - tx) * inv + a * (y - ty) * inv,
     };
   }
 

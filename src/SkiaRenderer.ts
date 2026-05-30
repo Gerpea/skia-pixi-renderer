@@ -21,6 +21,7 @@ export class SkiaRenderer {
   private registry = new MapperRegistry();
   private imageCache = new Map<string, Image>();
   private alphaCache = new Map<string, Uint8Array>();
+  private activeMasks = new Set<PIXI.DisplayObject>();
   private interactionManager: InteractionManager | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private tickerBound = false;
@@ -149,17 +150,31 @@ export class SkiaRenderer {
     if (this.options.scene) this.renderContainer(this.options.scene);
   }
 
+  private collectMasks(obj: PIXI.DisplayObject): void {
+    const mask = (obj as any).mask;
+    if (mask) this.activeMasks.add(mask);
+    if (obj instanceof PIXI.Container) {
+      for (const child of obj.children) this.collectMasks(child);
+    }
+  }
+
   renderContainer(container: PIXI.Container): void {
     if (!this.canvas || !this.ck || !this.paint) return;
+
+    // ✅ Collect all active masks
+    this.activeMasks.clear();
+    this.collectMasks(container);
+
     const ctx: RenderContext = {
       ck: this.ck,
       canvas: this.canvas,
       paint: this.paint,
       imageCache: this.imageCache,
       alphaCache: this.alphaCache,
+      activeMasks: this.activeMasks, // ✅ Pass to context
     };
 
-    // ✅ Background Color Clearing Support
+    // ✅ Background Color Clearing
     const bgColor = this.options.backgroundColor;
     if (bgColor !== undefined && bgColor !== null) {
       this.canvas.clear(CK.parseColor(this.ck, bgColor, 1));
@@ -175,85 +190,77 @@ export class SkiaRenderer {
     if (!obj.visible || obj.alpha === 0) return;
 
     const mask = (obj as any).mask;
-    let hasVectorMask = false;
-    let hasAlphaMask = false;
-
-    let objLayerPaint: Paint | null = null;
-    let maskLayerPaint: Paint | null = null;
 
     if (mask) {
       const isVectorMask = mask instanceof PIXI.Graphics && !(mask as any).isSpriteMask;
 
       if (isVectorMask) {
-        const maskPath = this.buildMaskPath(ctx, mask, worldMatrix);
-        if (maskPath) {
+        // Build path in mask's LOCAL coordinates
+        const localPath = this.buildMaskPathLocal(ctx, mask);
+        if (localPath) {
           ctx.canvas?.save();
-          ctx.canvas?.clipPath(maskPath, ctx.ck?.ClipOp.Intersect, true);
-          maskPath.delete();
-          hasVectorMask = true;
+
+          // Calculate transform: mask-local → canvas-world space
+          const maskWorld = TransformManager.pixiToSkiaMatrix(mask.transform.worldTransform);
+          const worldInv = TransformManager.invert(worldMatrix);
+
+          if (worldInv) {
+            const relMatrix = TransformManager.multiply(maskWorld, worldInv);
+
+            // ✅ Apply transform by rebuilding path with matrix
+            const builder = new ctx.ck!.PathBuilder();
+            builder.addPath(localPath, Array.from(relMatrix));
+            const transformedPath = builder.detach();
+            builder.delete();
+
+            // Clip with transformed path
+            ctx.canvas!.clipPath(transformedPath, ctx.ck!.ClipOp.Intersect, true);
+            transformedPath.delete();
+          } else {
+            // Fallback: clip in local space (may be offset if transforms fail)
+            ctx.canvas!.clipPath(localPath, ctx.ck!.ClipOp.Intersect, true);
+          }
+
+          localPath.delete();
+
+          // Draw object with clip applied
+          this.registry.getMapper(obj)?.draw(ctx, obj as any, worldMatrix);
+
+          ctx.canvas!.restore();
+          return;
         }
       } else {
-        objLayerPaint = new ctx.ck.Paint();
+        // ✅ ALPHA MASK: saveLayer + DstIn (unchanged)
+        const objLayerPaint = new ctx.ck.Paint();
         ctx.canvas?.saveLayer(objLayerPaint, null);
 
-        maskLayerPaint = new ctx.ck.Paint();
+        this.registry.getMapper(obj)?.draw(ctx, obj as any, worldMatrix);
+
+        const maskLayerPaint = new ctx.ck.Paint();
         maskLayerPaint.setBlendMode(ctx.ck.BlendMode.DstIn);
-        hasAlphaMask = true;
-      }
-    }
-
-    this.registry.getMapper(obj)?.draw(ctx, obj as any, worldMatrix);
-
-    if (hasAlphaMask && mask && maskLayerPaint && objLayerPaint) {
-      ctx.canvas?.saveLayer(maskLayerPaint, null);
-
-      const currentCanvasMatrix = new Float32Array(ctx.canvas!.getTotalMatrix());
-      const currentInv = TransformManager.invert(currentCanvasMatrix);
-
-      if (currentInv) {
-        const parentWorldTransform = mask.parent
-          ? mask.parent.transform.worldTransform
-          : new PIXI.Matrix();
-        const parentSkiaMatrix = TransformManager.pixiToSkiaMatrix(parentWorldTransform);
-
-        const relMatrix = TransformManager.multiply(currentInv, parentSkiaMatrix);
-        ctx.canvas?.concat(relMatrix);
+        ctx.canvas?.saveLayer(maskLayerPaint, null);
 
         const maskMapper = this.registry.getMapper(mask);
         if (maskMapper) {
-          const maskWorldMatrix = TransformManager.multiply(
-            parentSkiaMatrix,
-            TransformManager.pixiToSkiaMatrix(mask.transform)
-          );
+          const maskWorldMatrix = TransformManager.pixiToSkiaMatrix(mask.transform.worldTransform);
           maskMapper.draw(ctx, mask, maskWorldMatrix);
         }
+
+        ctx.canvas?.restore();
+        ctx.canvas?.restore();
+
+        objLayerPaint.delete();
+        maskLayerPaint.delete();
+        return;
       }
-
-      ctx.canvas?.restore();
-      ctx.canvas?.restore();
-
-      maskLayerPaint.delete();
-      objLayerPaint.delete();
-    } else if (hasVectorMask) {
-      ctx.canvas?.restore();
     }
-  }
 
-  private buildMaskPath(
-    ctx: RenderContext,
-    mask: PIXI.Graphics,
-    currentWorldMatrix: Float32Array
-  ): Path | null {
+    // ✅ No mask: draw normally
+    this.registry.getMapper(obj)?.draw(ctx, obj as any, worldMatrix);
+  }
+  private buildMaskPathLocal(ctx: RenderContext, mask: PIXI.Graphics): Path | null {
     const data = (mask as any).geometry?.graphicsData || [];
     if (!data.length) return null;
-
-    const maskWorldMatrix = mask.transform.worldTransform;
-    const maskSkiaMatrix = TransformManager.pixiToSkiaMatrix(maskWorldMatrix);
-
-    const parentInv = TransformManager.invert(currentWorldMatrix);
-    if (!parentInv) return null;
-
-    const relMatrix = TransformManager.multiply(parentInv, maskSkiaMatrix);
 
     const builder = new ctx.ck.PathBuilder();
     try {
@@ -264,7 +271,6 @@ export class SkiaRenderer {
           shapePath.delete();
         }
       }
-      builder.transform(Array.from(relMatrix));
       return builder.detach();
     } finally {
       builder.delete();
@@ -304,7 +310,7 @@ export class SkiaRenderer {
       const pdfCanvas = doc.beginPage(page.width, page.height);
       if (!pdfCanvas) throw new Error('Failed to begin page');
 
-      const pdfPaint = this.ck.MakePaint();
+      const pdfPaint = CK.makePaint(this.ck);
       pdfPaint.setAntiAlias(true);
       const ctx: RenderContext = {
         ck: this.ck,

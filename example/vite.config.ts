@@ -16,7 +16,7 @@ export default defineConfig({
       exclude: ['node_modules', 'vendor', 'example', 'dist'],
       staticImport: true,
       insertTypesEntry: true
-    }), ,
+    }),
     commonjs({
       include: /node_modules/,
       exclude: [/vendor\/canvaskit-wasm/, /node_modules\/canvaskit-wasm/],
