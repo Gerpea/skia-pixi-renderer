@@ -20,6 +20,7 @@ export class InteractionManager {
   private getScene: () => PIXI.Container | null;
   private callbacks = new Map<string, Set<(e: InteractionEvent) => void>>();
   private overTarget: PIXI.DisplayObject | null = null;
+  private downTarget: PIXI.DisplayObject | null = null;
   private hitCtx: RenderContext;
 
   constructor(
@@ -66,11 +67,37 @@ export class InteractionManager {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  private onDown = (e: PointerEvent) => this.processEvent('pointerdown', e);
-  private onUp = (e: PointerEvent) => this.processEvent('pointerup', e);
+  private onDown = (e: PointerEvent) => {
+    const ev = this.hitTest(e);
+    this.downTarget = ev.target; // ✅ Track down target
+    this.emitRendererEvent('pointerdown', ev);
+    PixiEventBridge.dispatch('pointerdown', ev.target, ev.global, e);
+  };
 
+  private onUp = (e: PointerEvent) => {
+    const ev = this.hitTest(e);
+    this.emitRendererEvent('pointerup', ev);
+    PixiEventBridge.dispatch('pointerup', ev.target, ev.global, e);
+
+    // ✅ 2. TAP / CLICK GESTURE RECOGNITION
+    if (this.downTarget && this.downTarget === ev.target) {
+      this.emitRendererEvent('pointertap', ev);
+      PixiEventBridge.dispatch('pointertap', ev.target, ev.global, e);
+
+      // Pixi also emits 'click' for mouse/touch parity
+      this.emitRendererEvent('click', ev);
+      PixiEventBridge.dispatch('click', ev.target, ev.global, e);
+    }
+    this.downTarget = null;
+  };
   private onMove = (e: PointerEvent) => {
     const ev = this.hitTest(e);
+
+    // ✅ 1. CURSOR MANAGEMENT
+    const cursor = (ev.target as any)?.cursor || 'default';
+    if (this.canvas.style.cursor !== cursor) {
+      this.canvas.style.cursor = cursor;
+    }
 
     if (ev.target !== this.overTarget) {
       if (this.overTarget) {
@@ -79,7 +106,6 @@ export class InteractionManager {
           target: this.overTarget,
           type: 'pointerout',
         });
-        // ✅ Removed local parameter
         PixiEventBridge.dispatch('pointerout', this.overTarget, ev.global, e);
       }
       if (ev.target) {
@@ -94,6 +120,7 @@ export class InteractionManager {
   };
 
   private onOut = (e: PointerEvent) => {
+    this.canvas.style.cursor = 'default';
     if (this.overTarget) {
       const ev = {
         type: 'pointerout' as const,
